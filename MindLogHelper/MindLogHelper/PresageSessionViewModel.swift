@@ -18,7 +18,7 @@ final class PresageSessionViewModel: ObservableObject {
 
     private var currentSessionId = UUID().uuidString
     private var lastSentAt = Date.distantPast
-    private let minSendInterval: TimeInterval = 0.5
+    private let minSendInterval: TimeInterval = 3.0
 
     func configure() {
         sdk.setApiKey(Config.presageAPIKey)
@@ -50,7 +50,7 @@ final class PresageSessionViewModel: ObservableObject {
     }
 
     private func sendToBackend(outputString: String) {
-        guard let url = URL(string: "https://princeton-bangled-masonically.ngrok-free.dev/") else { return }
+        guard let url = URL(string: "https://princeton-bangled-masonically.ngrok-free.dev/api/presage") else { return }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
