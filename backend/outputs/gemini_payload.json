@@ -1,0 +1,18 @@
+{
+  "transcript": "I felt overwhelmed for most of today, but I am trying to slow down and understand what I need instead of pushing through it.",
+  "stress_score": 46,
+  "physiology_summary": "Breathing rate decreased over the session. Signals were mixed. Pulse variability was low. Breathing variability was moderate.",
+  "presage_features": {
+    "pulse_rate_mean": 41.5,
+    "pulse_rate_std": 0.408248290463863,
+    "breathing_rate_mean": 13.0,
+    "breathing_rate_std": 1.632993161855452,
+    "breathing_rate_trend": "decreasing",
+    "pulse_trace_std": 0.013146843962443592,
+    "breathing_trace_std": 0.04103596736137642,
+    "blink_count": 1,
+    "blink_rate": 0.3333333333333333,
+    "talking_ratio": 0.6666666666666666,
+    "signal_quality": "mixed"
+  }
+}
