@@ -35,10 +35,6 @@ export default function AudioTranscriber() {
     const storedId = localStorage.getItem("mindlog_user_id");
     if (storedId) {
       setUserId(storedId);
-    } else {
-      const newId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      localStorage.setItem("mindlog_user_id", newId);
-      setUserId(newId);
     }
   }, []);
 

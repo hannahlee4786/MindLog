@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 
 interface Entry {
   _id: string;
@@ -21,60 +21,118 @@ interface Entry {
   };
 }
 
+const NotebookRings = () => (
+  <div className="absolute left-0 top-10 bottom-10 flex flex-col justify-evenly w-12 z-20 pointer-events-none">
+    {Array(6).fill(0).map((_, i) => (
+      <div key={i} className="flex items-center relative -ml-1 drop-shadow-md">
+        <div className="w-10 h-3.5 bg-gradient-to-b from-[#e5e5e5] via-[#ffffff] to-[#cccccc] rounded-full shadow-[2px_2px_4px_rgba(0,0,0,0.15)] border border-[#d1d1d1] z-10 relative">
+          <div className="absolute top-[2px] left-1 right-1 h-[2px] bg-white/80 rounded-full" />
+        </div>
+        <div className="w-5 h-5 bg-background rounded-full absolute right-1 shadow-inner border border-black/5 z-0" />
+      </div>
+    ))}
+  </div>
+);
+
 export default function JournalView() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "7days" | "30days" | "high" | "low">("all");
-  const [currentTranscription, setCurrentTranscription] = useState<string | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+
+  // Calendar state
+  const [calendarDate, setCalendarDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  // Page flipping within a day
+  const [pageIndex, setPageIndex] = useState(0);
+
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  const handleSpeak = async (text: string) => {
+    if (isSpeaking) return;
+    setIsSpeaking(true);
+    try {
+      const res = await fetch("/api/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.play();
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setIsSpeaking(false);
+      };
+    } catch (err) {
+      console.error("TTS error:", err);
+      setIsSpeaking(false);
+    }
+  };
 
   useEffect(() => {
     handlePendingAudio();
     fetchEntries();
   }, []);
 
+  // Reset page index when selected date changes
+  useEffect(() => {
+    setPageIndex(0);
+  }, [selectedDate]);
+
   const handlePendingAudio = async () => {
     const pendingAudioBase64 = sessionStorage.getItem("pendingAudioBlob");
-    if (pendingAudioBase64) {
-      setIsTranscribing(true);
-      setTranscriptionError(null);
+    if (!pendingAudioBase64) return;
 
-      try {
-        // Convert base64 back to blob
-        const byteCharacters = atob(pendingAudioBase64.split(",")[1]);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const audioBlob = new Blob([byteArray], { type: "audio/webm" });
+    sessionStorage.removeItem("pendingAudioBlob");
+    setIsTranscribing(true);
+    setTranscriptionError(null);
 
-        // Send to transcription API
-        const formData = new FormData();
-        formData.append("audio", audioBlob, "recording.webm");
-
-        const response = await fetch("/api/transcribe", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error("Transcription failed");
-        }
-
-        const result = await response.json();
-        const transcription = result.text || result.transcription || "";
-        setCurrentTranscription(transcription);
-
-        // Clear from session storage
-        sessionStorage.removeItem("pendingAudioBlob");
-      } catch (err) {
-        setTranscriptionError("Failed to transcribe audio. Please try again.");
-        console.error("Transcription error:", err);
-      } finally {
-        setIsTranscribing(false);
+    try {
+      const byteCharacters = atob(pendingAudioBase64.split(",")[1]);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
+      const byteArray = new Uint8Array(byteNumbers);
+      const audioBlob = new Blob([byteArray], { type: "audio/webm" });
+
+      const formData = new FormData();
+      formData.append("audio", audioBlob, "recording.webm");
+
+      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+      if (!response.ok) throw new Error("Transcription failed");
+
+      const result = await response.json();
+      const transcription = result.text || result.transcription || "";
+
+      if (transcription) {
+        const userId = localStorage.getItem("mindlog_user_id");
+        if (userId) {
+          const entryRes = await fetch("/api/entries", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId, transcription, type: "voice", stressScore: null }),
+          });
+          if (entryRes.ok) {
+            const { entryId } = await entryRes.json();
+            await fetch("/api/entries/logoutput", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ entryId }),
+            });
+            fetchEntries();
+          }
+        }
+      }
+    } catch (err) {
+      setTranscriptionError("Failed to transcribe audio. Please try again.");
+      console.error("Transcription error:", err);
+    } finally {
+      setIsTranscribing(false);
     }
   };
 
@@ -94,289 +152,253 @@ export default function JournalView() {
     }
   };
 
-  const getFilteredEntries = () => {
-    const now = new Date();
-    return entries.filter((entry) => {
-      const entryDate = new Date(entry.createdAt);
-      const daysDiff = Math.floor(
-        (now.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24)
-      );
+  // Calendar helpers
+  const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
+  const getFirstDayOfMonth = (year: number, month: number) => new Date(year, month, 1).getDay();
 
-      if (filter === "7days") return daysDiff <= 7;
-      if (filter === "30days") return daysDiff <= 30;
-      if (filter === "high") return (entry.stressScore || 0) >= 7;
-      if (filter === "low") return (entry.stressScore || 0) < 5;
-      return true;
-    });
-  };
+  const entriesByDate = entries.reduce<Record<string, Entry[]>>((acc, entry) => {
+    const d = new Date(entry.createdAt).toDateString();
+    if (!acc[d]) acc[d] = [];
+    acc[d].push(entry);
+    return acc;
+  }, {});
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  };
+  const year = calendarDate.getFullYear();
+  const month = calendarDate.getMonth();
+  const daysInMonth = getDaysInMonth(year, month);
+  const firstDay = getFirstDayOfMonth(year, month);
 
-  const filteredEntries = getFilteredEntries();
+  const monthName = calendarDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  // Entries for selected date or all entries sorted desc
+  const displayEntries = selectedDate
+    ? (entriesByDate[selectedDate] || [])
+    : entries;
+
+  const currentEntry = displayEntries[pageIndex] ?? null;
+
+  const stressLabel = (score: number) =>
+    score >= 7 ? "High stress" : score >= 5 ? "Medium stress" : "Low stress";
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
-      <h1 className="text-4xl font-bold text-foreground mb-8">Journal</h1>
-
-      {/* Current Session - Display if transcribing or transcription available */}
-      {(isTranscribing || currentTranscription) && (
-        <div className="mb-8 bg-card rounded-lg shadow-md border border-border overflow-hidden">
-          <div className="p-6 space-y-4">
-            <h2 className="text-2xl font-semibold text-foreground">Today's Entry</h2>
-
-            {isTranscribing && (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 animate-spin text-primary mr-3" />
-                <span className="text-foreground/70">Transcribing your message...</span>
-              </div>
-            )}
-
-            {transcriptionError && (
-              <div className="bg-destructive/10 border border-destructive rounded-lg p-4">
-                <p className="text-sm text-destructive">{transcriptionError}</p>
-              </div>
-            )}
-
-            {currentTranscription && (
-              <div className="space-y-4">
-                {/* Your Message */}
-                <div className="bg-primary/10 border border-primary rounded-lg p-4">
-                  <p className="text-sm text-foreground/60 font-medium mb-2">YOUR MESSAGE</p>
-                  <p className="text-foreground leading-relaxed">{currentTranscription}</p>
-                </div>
-
-                {/* Stress Score */}
-                <div className="bg-chart-1/10 border border-chart-1 rounded-lg p-4">
-                  <p className="text-sm text-foreground/60 font-medium mb-2">TODAY'S STRESS LEVEL</p>
-                  <div className="flex items-end gap-3">
-                    <div className="text-4xl font-bold text-chart-1">7.3</div>
-                    <div className="text-sm text-foreground/70 mb-1">/ 10 (High stress)</div>
-                  </div>
-                </div>
-
-                {/* Affirmation */}
-                <div className="bg-secondary/10 border border-secondary rounded-lg p-4">
-                  <p className="text-sm text-foreground/60 font-medium mb-2">YOUR AFFIRMATION FOR TODAY</p>
-                  <p className="text-lg text-foreground italic leading-relaxed">
-                    "I am stronger than my challenges, and today I choose to move forward with compassion for myself."
-                  </p>
-                </div>
-
-                {/* Summary */}
-                <div className="bg-accent/10 border border-accent rounded-lg p-4">
-                  <p className="text-sm text-foreground/60 font-medium mb-2">WHAT WE HEARD</p>
-                  <p className="text-foreground/80 leading-relaxed">
-                    You're working through some meaningful challenges right now. It sounds like you're carrying a lot, but you're also being thoughtful and reflective about your situation. These are signs of your resilience and emotional maturity.
-                  </p>
-                </div>
-
-                {/* Things to Be Grateful For */}
-                <div className="bg-chart-4/10 border border-chart-4 rounded-lg p-4">
-                  <p className="text-sm text-foreground/60 font-medium mb-3">THINGS TO BE GRATEFUL FOR</p>
-                  <ul className="space-y-2">
-                    <li className="flex items-start gap-3 text-foreground/80">
-                      <span className="text-chart-4 font-bold mt-0.5">•</span>
-                      <span>Your ability to reflect and communicate your feelings openly</span>
-                    </li>
-                    <li className="flex items-start gap-3 text-foreground/80">
-                      <span className="text-chart-4 font-bold mt-0.5">•</span>
-                      <span>Taking time to check in with yourself and your emotions</span>
-                    </li>
-                    <li className="flex items-start gap-3 text-foreground/80">
-                      <span className="text-chart-4 font-bold mt-0.5">•</span>
-                      <span>Your strength in navigating difficult moments with grace</span>
-                    </li>
-                    <li className="flex items-start gap-3 text-foreground/80">
-                      <span className="text-chart-4 font-bold mt-0.5">•</span>
-                      <span>The support systems around you that help you through tough times</span>
-                    </li>
-                  </ul>
-                </div>
-
-                {/* Soundtrack */}
-                <div className="bg-chart-3/10 border border-chart-3 rounded-lg p-4">
-                  <p className="text-sm text-foreground/60 font-medium mb-3">YOUR MINDLOG SOUNDTRACK</p>
-                  <div className="flex items-center gap-4">
-                    {/* Album Cover */}
-                    <div className="w-20 h-20 bg-gradient-to-br from-chart-3 via-primary to-chart-1 rounded-lg shadow-md flex items-center justify-center flex-shrink-0">
-                      <svg
-                        className="w-10 h-10 text-white"
-                        fill="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path d="M12 3v9.28c-.47-.46-1.12-.75-1.84-.75-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V7h4V3h-5z" />
-                      </svg>
-                    </div>
-                    {/* Song Info */}
-                    <div>
-                      <p className="font-semibold text-foreground">Rise Up</p>
-                      <p className="text-sm text-foreground/70">Andra Day</p>
-                      <p className="text-xs text-foreground/50 mt-1">A powerful anthem of resilience and inner strength</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+      {isTranscribing && (
+        <div className="flex items-center gap-3 mb-6 p-4 bg-card rounded-lg border border-border">
+          <Loader2 className="w-5 h-5 animate-spin text-primary" />
+          <span className="text-foreground/70">Transcribing your entry...</span>
+        </div>
+      )}
+      {transcriptionError && (
+        <div className="mb-6 p-4 bg-destructive/10 border border-destructive rounded-lg text-sm text-destructive">
+          {transcriptionError}
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
-        {/* Filters Sidebar */}
-        <div className="lg:col-span-1">
-          <div className="bg-card rounded-lg shadow-md p-6">
-            <h3 className="text-lg font-semibold text-card-foreground mb-4">
-              Filters
-            </h3>
-            <div className="space-y-3">
-              {[
-                { label: "All Time", value: "all" },
-                { label: "Last 7 days", value: "7days" },
-                { label: "Last 30 days", value: "30days" },
-                { label: "High stress days", value: "high" },
-                { label: "Low stress days", value: "low" },
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => setFilter(option.value as any)}
-                  className={`block w-full text-left px-4 py-2 rounded-lg transition ${
-                    filter === option.value
-                      ? "bg-primary/20 text-primary font-semibold"
-                      : "text-card-foreground/70 hover:bg-card/50"
-                  }`}
-                >
-                  {option.label}
-                </button>
+      <div className="flex gap-6">
+        {/* Left sidebar */}
+        <div className="w-56 flex-shrink-0 space-y-4">
+          {/* Filters */}
+          <div className="bg-card rounded-2xl shadow-sm p-5 border border-border">
+            <h3 className="text-sm font-semibold text-foreground mb-3">Filters</h3>
+            <div className="space-y-1">
+              <button
+                onClick={() => setSelectedDate(null)}
+                className={`block w-full text-left px-3 py-1.5 rounded-lg text-sm transition ${
+                  selectedDate === null ? "bg-primary/15 text-primary font-medium" : "text-foreground/60 hover:bg-muted"
+                }`}
+              >
+                All entries
+              </button>
+            </div>
+          </div>
+
+          {/* Calendar */}
+          <div className="bg-card rounded-2xl shadow-sm p-5 border border-border">
+            <div className="flex items-center justify-between mb-3">
+              <button
+                onClick={() => setCalendarDate(new Date(year, month - 1, 1))}
+                className="p-1 rounded hover:bg-muted transition"
+              >
+                <ChevronLeft className="w-4 h-4 text-foreground/50" />
+              </button>
+              <span className="text-sm font-semibold text-foreground">{monthName}</span>
+              <button
+                onClick={() => setCalendarDate(new Date(year, month + 1, 1))}
+                className="p-1 rounded hover:bg-muted transition"
+              >
+                <ChevronRight className="w-4 h-4 text-foreground/50" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-7 gap-0.5 text-center">
+              {["S","M","T","W","T","F","S"].map((d, i) => (
+                <div key={i} className="text-[10px] font-semibold text-foreground/40 py-1">{d}</div>
               ))}
+              {Array(firstDay).fill(null).map((_, i) => <div key={`empty-${i}`} />)}
+              {Array(daysInMonth).fill(0).map((_, i) => {
+                const day = i + 1;
+                const dateObj = new Date(year, month, day);
+                const dateStr = dateObj.toDateString();
+                const hasEntries = !!entriesByDate[dateStr];
+                const isSelected = selectedDate === dateStr;
+                const isToday = dateStr === new Date().toDateString();
+                return (
+                  <button
+                    key={day}
+                    onClick={() => setSelectedDate(isSelected ? null : dateStr)}
+                    className={`w-7 h-7 mx-auto rounded-full text-xs flex items-center justify-center transition relative
+                      ${isSelected ? "bg-primary text-primary-foreground font-semibold" : ""}
+                      ${isToday && !isSelected ? "border border-primary text-primary font-semibold" : ""}
+                      ${!isSelected && !isToday ? "text-foreground/70 hover:bg-muted" : ""}
+                    `}
+                  >
+                    {day}
+                    {hasEntries && !isSelected && (
+                      <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-primary" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
-        {/* Entries List */}
-        <div className="lg:col-span-3">
+        {/* Notebook area */}
+        <div className="flex-1">
           {isLoading ? (
-            <div className="text-center py-12">
-              <p className="text-foreground/70">Loading entries...</p>
+            <div className="flex items-center justify-center h-64">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
             </div>
-          ) : filteredEntries.length === 0 && !currentTranscription ? (
-            <div className="bg-card rounded-lg shadow-md p-12 text-center">
-              <p className="text-foreground/50 text-lg">
-                No entries found. Start recording your first journal entry!
+          ) : displayEntries.length === 0 ? (
+            <div className="relative bg-card rounded-2xl shadow-sm border border-border p-12 pl-16 text-center">
+              <NotebookRings />
+              <p className="text-foreground/40 text-lg">
+                {selectedDate ? "No entries for this day." : "No entries yet. Start recording!"}
               </p>
             </div>
           ) : (
-            <div className="space-y-6">
-              {filteredEntries.map((entry) => (
-                <div
-                  key={entry._id}
-                  className="bg-card rounded-lg shadow-md p-6 hover:shadow-lg transition"
-                >
-                  <div className="flex items-start justify-between mb-4">
-                    <h3 className="text-xl font-semibold text-card-foreground">
-                      {formatDate(entry.createdAt)}
-                    </h3>
-                    {entry.stressScore !== null && (
-                      <span
-                        className={`px-4 py-2 rounded-full text-sm font-semibold ${
-                          entry.stressScore! >= 7
-                            ? "bg-destructive/20 text-destructive"
-                            : entry.stressScore! >= 5
-                            ? "bg-chart-2/20 text-chart-2"
-                            : "bg-chart-4/20 text-chart-4"
-                        }`}
+            <div className="relative bg-card rounded-2xl shadow-md border border-border pl-16 overflow-hidden">
+              <NotebookRings />
+
+              {/* Page header */}
+              <div className="flex items-center justify-between px-8 pt-8 pb-4 border-b border-border">
+                <h2 className="text-3xl font-light text-foreground">
+                  {new Date(currentEntry!.createdAt).toLocaleDateString("en-US", {
+                    month: "long", day: "numeric", year: "numeric"
+                  })}
+                </h2>
+                <div className="flex items-center gap-3">
+                  {currentEntry?.stressScore != null && (
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium border ${
+                      currentEntry.stressScore >= 7
+                        ? "bg-destructive/10 text-destructive border-destructive/20"
+                        : currentEntry.stressScore >= 5
+                        ? "bg-yellow-100 text-yellow-800 border-yellow-200"
+                        : "bg-green-100 text-green-800 border-green-200"
+                    }`}>
+                      {stressLabel(currentEntry.stressScore)} • {currentEntry.stressScore}/10
+                    </span>
+                  )}
+                  {/* Page arrows */}
+                  {displayEntries.length > 1 && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setPageIndex(Math.max(0, pageIndex - 1))}
+                        disabled={pageIndex === 0}
+                        className="p-1.5 rounded-lg hover:bg-muted transition disabled:opacity-30"
                       >
-                        {entry.stressScore! >= 7
-                          ? "High stress"
-                          : entry.stressScore! >= 5
-                          ? "Medium stress"
-                          : "Low stress"}{" "}
-                        • {entry.stressScore}/10
-                      </span>
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-xs text-foreground/40">{pageIndex + 1}/{displayEntries.length}</span>
+                      <button
+                        onClick={() => setPageIndex(Math.min(displayEntries.length - 1, pageIndex + 1))}
+                        disabled={pageIndex === displayEntries.length - 1}
+                        className="p-1.5 rounded-lg hover:bg-muted transition disabled:opacity-30"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {currentEntry && (
+                <div className="px-8 py-6 space-y-6">
+                  {/* Stress Score + Soundtrack side by side */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {currentEntry.stressScore != null && (
+                      <div className="bg-muted/50 rounded-xl p-5 border border-border">
+                        <div className="flex items-center gap-2 mb-3">
+                          <svg className="w-4 h-4 text-foreground/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                          </svg>
+                          <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide">Stress Score</p>
+                        </div>
+                        <p className="text-5xl font-light text-foreground">{currentEntry.stressScore}</p>
+                        <p className="text-sm text-foreground/40 mt-1">/ 10</p>
+                      </div>
+                    )}
+                    {currentEntry.logOutput?.songRecommendation && (
+                      <div className="bg-muted/50 rounded-xl p-5 border border-border flex items-center gap-4">
+                        <div className="w-14 h-14 bg-gradient-to-br from-primary/30 to-chart-3/30 rounded-xl flex-shrink-0 flex items-center justify-center">
+                          <svg className="w-7 h-7 text-primary" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 3v9.28c-.47-.46-1.12-.75-1.84-.75-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V7h4V3h-5z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide mb-1">Soundtrack</p>
+                          <p className="font-semibold text-foreground text-sm">{currentEntry.logOutput.songRecommendation.title}</p>
+                          <p className="text-xs text-foreground/50">{currentEntry.logOutput.songRecommendation.artist}</p>
+                        </div>
+                      </div>
                     )}
                   </div>
 
-                  {/* Presage Data Score */}
-                  {entry.stressScore !== null && entry.stressScore !== undefined && (
-                    <div className="mb-4 p-4 bg-chart-1/10 rounded-lg border border-chart-1">
-                      <p className="text-sm text-foreground/60 font-medium mb-1">
-                        PRESAGE DATA SCORE
-                      </p>
-                      <p className="text-4xl font-bold text-chart-1">
-                        {Math.round(entry.stressScore * 10)} <span className="text-xl">/100</span>
-                      </p>
-                      <p className="text-xs text-foreground/50 mt-2">
-                        Overall stress score based on analyzed presage data.
-                      </p>
+                  {/* Affirmation */}
+                  {currentEntry.logOutput?.affirmation && (
+                    <div className="bg-amber-50 rounded-xl p-5 border border-amber-100">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs font-semibold text-amber-600 uppercase tracking-wide">Daily Affirmation</p>
+                        <button
+                          onClick={() => handleSpeak(`${currentEntry.logOutput!.emotionalInference} ${currentEntry.logOutput!.affirmation}`)}
+                          disabled={isSpeaking}
+                          className="flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-800 disabled:opacity-50 transition"
+                        >
+                          {isSpeaking ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                            </svg>
+                          )}
+                          {isSpeaking ? "Playing..." : "Listen"}
+                        </button>
+                      </div>
+                      <p className="text-lg italic text-foreground">"{currentEntry.logOutput.affirmation}"</p>
+                    </div>
+                  )}
+
+                  {/* Summary */}
+                  {currentEntry.logOutput?.emotionalInference && (
+                    <div className="rounded-xl p-5 border border-border">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-4 h-4 text-foreground/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <circle cx="12" cy="12" r="10" strokeWidth={2} />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" />
+                        </svg>
+                        <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide">Summary</p>
+                      </div>
+                      <p className="text-foreground/80 leading-relaxed">{currentEntry.logOutput.emotionalInference}</p>
                     </div>
                   )}
 
                   {/* Transcription */}
-                  <div className="mb-4">
-                    <p className="text-foreground/80 leading-relaxed">
-                      {entry.transcription}
-                    </p>
+                  <div className="border-t border-border pt-4">
+                    <p className="text-xs font-semibold text-foreground/30 uppercase tracking-wide mb-2">Your words</p>
+                    <p className="text-foreground/70 leading-relaxed">{currentEntry.transcription}</p>
                   </div>
-
-                  {/* Log Output */}
-                  {entry.logOutput && (
-                    <div className="space-y-4 border-t border-border pt-4">
-                      {/* Affirmation */}
-                      <div className="bg-chart-2/10 border border-chart-2 rounded-lg p-4">
-                        <p className="text-sm text-foreground/60 font-medium mb-2">
-                          DAILY AFFIRMATION
-                        </p>
-                        <p className="text-lg text-foreground italic">
-                          "{entry.logOutput.affirmation}"
-                        </p>
-                      </div>
-
-                      {/* Summary (using emotional inference) */}
-                      <div className="bg-chart-1/10 border border-chart-1 rounded-lg p-4">
-                        <p className="text-sm text-foreground/60 font-medium mb-2">
-                          SUMMARY
-                        </p>
-                        <p className="text-foreground/80">
-                          {entry.logOutput.emotionalInference}
-                        </p>
-                      </div>
-
-                      {/* Soundtrack */}
-                      {entry.logOutput.songRecommendation && (
-                        <div className="bg-chart-3/10 border border-chart-3 rounded-lg p-4">
-                          <p className="text-sm text-foreground/60 font-medium mb-2">
-                            SOUNDTRACK
-                          </p>
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 bg-gradient-to-br from-chart-1 to-chart-4 rounded-lg flex items-center justify-center">
-                              <svg
-                                className="w-6 h-6 text-primary-foreground"
-                                fill="currentColor"
-                                viewBox="0 0 24 24"
-                              >
-                                <path d="M12 3v9.28c-.47-.46-1.12-.75-1.84-.75-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V7h4V3h-5z" />
-                              </svg>
-                            </div>
-                            <div>
-                              <p className="font-semibold text-foreground">
-                                {entry.logOutput.songRecommendation.title}
-                              </p>
-                              <p className="text-sm text-foreground/60">
-                                {entry.logOutput.songRecommendation.artist}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
