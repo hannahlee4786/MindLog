@@ -1,0 +1,6 @@
+fastapi
+google-genai
+numpy
+pymongo
+python-dotenv
+uvicorn[standard]

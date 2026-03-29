@@ -6,7 +6,7 @@ import { ObjectId } from "mongodb";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { entryId } = body;
+    const { entryId, biometrics } = body;
 
     if (!entryId) {
       return NextResponse.json(
@@ -32,7 +32,8 @@ export async function POST(request: NextRequest) {
     // Generate log output using Gemini
     const logOutput = await generateLogOutput(
       entry.transcription,
-      entry.stressScore
+      entry.stressScore,
+      biometrics ?? undefined
     );
 
     // Update entry with log output

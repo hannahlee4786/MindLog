@@ -95,10 +95,12 @@ export function Session() {
         throw new Error(`Failed to save entry: ${err.error || entryRes.status}`);
       }
       const { entryId } = await entryRes.json();
+      const presageRes = await fetch("/api/presage");
+      const presageData = presageRes.ok ? (await presageRes.json()).data : null;
       await fetch("/api/entries/logoutput", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entryId }),
+        body: JSON.stringify({ entryId, biometrics: presageData }),
       });
     } catch (err: any) {
       setSaveError(err.message || "Something went wrong");

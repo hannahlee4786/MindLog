@@ -1,0 +1,11 @@
+{
+  "pulse_rate_mean": 41.5,
+  "pulse_rate_std": 0.408248290463863,
+  "breathing_rate_mean": 13.0,
+  "breathing_rate_std": 1.632993161855452,
+  "breathing_rate_slope": -1.9999999999999996,
+  "pulse_trace_std": 0.013146843962443592,
+  "breathing_trace_std": 0.04103596736137642,
+  "blink_rate": 0.3333333333333333,
+  "talking_ratio": 0.6666666666666666
+}

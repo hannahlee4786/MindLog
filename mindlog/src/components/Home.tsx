@@ -1,64 +1,75 @@
 "use client";
 
-import { Mic, Type } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { Mic, Type, Loader2 } from "lucide-react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { VoiceRecorder } from "./VoiceRecorder";
 
 export function Home() {
   const router = useRouter();
-  const [inputMode, setInputMode] = useState<"text" | "voice">("text");
-  const [stressData, setStressData] = useState<{ level: number; label: string } | null>(null);
-  const [isLoadingStress, setIsLoadingStress] = useState(true);
-  const audioBlob = useRef<Blob | null>(null);
+  const [inputMode, setInputMode] = useState<"text" | "voice">("voice");
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchTodayStressData();
-  }, []);
+  const handleAudioReady = async (blob: Blob) => {
+    setIsTranscribing(true);
+    setTranscript(null);
+    setError(null);
 
-  const fetchTodayStressData = async () => {
     try {
-      const userId = localStorage.getItem("mindlog_user_id");
-      if (!userId) return;
-      const response = await fetch(`/api/entries?userId=${userId}&limit=1`, {
-        credentials: "include",
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const latestEntry = data.entries?.[0];
-
-        if (latestEntry && latestEntry.stressScore !== undefined) {
-          const score = latestEntry.stressScore;
-          const label =
-            score >= 7 ? "High stress" : score >= 5 ? "Medium stress" : "Low stress";
-          setStressData({ level: score, label });
-        }
-      }
-    } catch (error) {
-      console.error("Failed to fetch stress data:", error);
+      const formData = new FormData();
+      formData.append("audio", blob, "recording.webm");
+      const res = await fetch("/api/transcribe", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Transcription failed");
+      const data = await res.json();
+      const text = data.text || "";
+      if (!text) throw new Error("No speech detected — try again");
+      setTranscript(text);
+    } catch (err: any) {
+      setError(err.message || "Transcription failed");
     } finally {
-      setIsLoadingStress(false);
+      setIsTranscribing(false);
     }
   };
 
   const handleBeginSession = async () => {
-    // Store the audio blob in session storage if available
-    if (audioBlob.current) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = reader.result as string;
-        sessionStorage.setItem("pendingAudioBlob", base64);
-        router.push("/journal");
-      };
-      reader.readAsDataURL(audioBlob.current);
-    } else {
-      router.push("/journal");
-    }
-  };
+    if (!transcript) return;
+    setIsSubmitting(true);
+    setError(null);
 
-  const handleAudioReady = (blob: Blob) => {
-    audioBlob.current = blob;
+    try {
+      const userId = localStorage.getItem("mindlog_user_id");
+      if (!userId) throw new Error("Not logged in");
+
+      // Save entry to MongoDB
+      const entryRes = await fetch("/api/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, transcription: transcript, type: "voice", stressScore: null }),
+      });
+      if (!entryRes.ok) throw new Error("Failed to save entry");
+      const { entryId } = await entryRes.json();
+
+      // Navigate immediately — don't block on Gemini
+      router.push("/journal");
+
+      // Fire logoutput in background after navigation
+      fetch("/api/presage")
+        .then((r) => r.ok ? r.json() : { data: null })
+        .then(({ data: presageData }) =>
+          fetch("/api/entries/logoutput", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ entryId, biometrics: presageData }),
+          })
+        )
+        .catch(console.error);
+    } catch (err: any) {
+      setError(err.message || "Something went wrong");
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -67,15 +78,7 @@ export function Home() {
         <h2 className="text-xl text-foreground">Start today's MindLog session</h2>
 
         <div className="space-y-4">
-          {inputMode === "text" ? (
-            <button
-              onClick={() => setInputMode("voice")}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg border-2 border-border text-muted-foreground hover:border-primary hover:text-primary font-medium text-sm transition-colors"
-            >
-              <Mic className="w-4 h-4" />
-              Start Recording
-            </button>
-          ) : (
+          {inputMode === "voice" ? (
             <div className="space-y-3">
               <button
                 onClick={() => setInputMode("text")}
@@ -86,32 +89,55 @@ export function Home() {
               </button>
               <VoiceRecorder onAudioReady={handleAudioReady} />
             </div>
+          ) : (
+            <button
+              onClick={() => setInputMode("voice")}
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg border-2 border-border text-muted-foreground hover:border-primary hover:text-primary font-medium text-sm transition-colors"
+            >
+              <Mic className="w-4 h-4" />
+              Start Recording
+            </button>
+          )}
+
+          {/* Transcription status */}
+          {isTranscribing && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Transcribing...
+            </div>
+          )}
+
+          {/* Show transcript preview */}
+          {transcript && (
+            <div className="bg-muted/50 rounded-lg p-4 border border-border">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Transcript</p>
+              <p className="text-sm text-foreground leading-relaxed">{transcript}</p>
+            </div>
+          )}
+
+          {error && (
+            <p className="text-sm text-destructive">{error}</p>
           )}
 
           <button
             onClick={handleBeginSession}
-            className="w-full bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors font-medium"
+            disabled={!transcript || isSubmitting}
+            className="w-full bg-primary text-primary-foreground py-3 rounded-lg hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            Begin Session
+            {isSubmitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Saving session...
+              </>
+            ) : (
+              "Begin Session"
+            )}
           </button>
 
           <p className="text-sm text-muted-foreground text-center">
             MindLog will ask a few gentle questions based on how you're doing today.
           </p>
         </div>
-
-        {stressData && (
-          <div className="bg-muted/50 rounded-lg p-4 space-y-3 border border-border">
-            <div className="space-y-1">
-              <div className="text-sm text-muted-foreground">Your stress today</div>
-              <div className="text-2xl font-medium text-foreground">{stressData.level} / 10</div>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <div className="w-2 h-2 rounded-full bg-[#EAAB99]" />
-              <span className="text-muted-foreground">{stressData.label}</span>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
