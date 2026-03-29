@@ -12,14 +12,40 @@ interface Entry {
   createdAt: string;
   tags?: string[];
   logOutput?: {
-    emotionalInference: string;
+    song_name: string;
+    artist: string;
+    album_cover_url: string;
     affirmation: string;
-    songRecommendation: {
-      title: string;
-      artist: string;
-    };
+    summary: string;
+    gratitude_points: string[];
+    stress_score: number;
   };
 }
+
+// Hardcoded from backend/outputs/gemini_response.json
+const PLACEHOLDER_LOG_OUTPUT = {
+  song_name: "Golden Hour",
+  artist: "JVKE",
+  album_cover_url: "https://i.scdn.co/image/ab67616d0000b273c2504e80ba2f258697ab2954",
+//   affirmation: "I can respond to this moment with honesty, care, and patience.",
+//   summary: "You described a reflective moment with both strain and effort to keep moving.",
+//   gratitude_points: [
+//     "You took time to check in with yourself.",
+//     "You created a record of how this moment feels.",
+//     "You are still looking for a steady next step.",
+//   ],
+  stress_score: 89,
+  summary: "You’re dealing with a tough mix of disappointment, stress, and exhaustion—failing a midterm, missing out on something you were looking forward to, and trying to cope in ways that didn’t fully help, all while still pushing yourself to attend a hackathon where things aren’t going smoothly.",
+  affirmation: "You’re allowed to have rough days—what matters is that you’re still showing up and trying, even when everything feels overwhelming.",
+  gratitude_points: [
+    "Your resilience in still going to the hackathon despite everything.",
+    "The awareness you have about your feelings and what led to them.",
+    "The chance today brings to reset, even if it starts small."
+  ],
+//   music_mood: "gentle_encouragement",
+//   suggested_song_title: "Fix You",
+//   suggested_song_artist: "Coldplay"
+};
 
 const NotebookRings = () => (
   <div className="absolute left-0 top-10 bottom-10 flex flex-col justify-evenly w-12 z-20 pointer-events-none">
@@ -37,8 +63,6 @@ const NotebookRings = () => (
 export default function JournalView() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
 
   // Calendar state
   const [calendarDate, setCalendarDate] = useState(new Date());
@@ -74,7 +98,6 @@ export default function JournalView() {
   };
 
   useEffect(() => {
-    handlePendingAudio();
     fetchEntries();
   }, []);
 
@@ -83,73 +106,34 @@ export default function JournalView() {
     setPageIndex(0);
   }, [selectedDate]);
 
-  const handlePendingAudio = async () => {
-    const pendingAudioBase64 = sessionStorage.getItem("pendingAudioBlob");
-    if (!pendingAudioBase64) return;
-
-    sessionStorage.removeItem("pendingAudioBlob");
-    setIsTranscribing(true);
-    setTranscriptionError(null);
-
-    try {
-      const byteCharacters = atob(pendingAudioBase64.split(",")[1]);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const audioBlob = new Blob([byteArray], { type: "audio/webm" });
-
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "recording.webm");
-
-      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
-      if (!response.ok) throw new Error("Transcription failed");
-
-      const result = await response.json();
-      const transcription = result.text || result.transcription || "";
-
-      if (transcription) {
-        const userId = localStorage.getItem("mindlog_user_id");
-        if (userId) {
-          const entryRes = await fetch("/api/entries", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, transcription, type: "voice", stressScore: null }),
-          });
-          if (entryRes.ok) {
-            const { entryId } = await entryRes.json();
-            await fetch("/api/entries/logoutput", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ entryId }),
-            });
-            fetchEntries();
-          }
-        }
-      }
-    } catch (err) {
-      setTranscriptionError("Failed to transcribe audio. Please try again.");
-      console.error("Transcription error:", err);
-    } finally {
-      setIsTranscribing(false);
-    }
-  };
-
   const fetchEntries = async () => {
     setIsLoading(true);
-    try {
-      const userId = localStorage.getItem("mindlog_user_id");
-      const response = await fetch(`/api/entries?userId=${userId}`);
-      if (response.ok) {
-        const data = await response.json();
-        setEntries(data.entries || []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch entries:", error);
-    } finally {
-      setIsLoading(false);
-    }
+    // TODO: re-enable MongoDB fetch when ready
+    // try {
+    //   const userId = localStorage.getItem("mindlog_user_id");
+    //   const response = await fetch(`/api/entries?userId=${userId}`);
+    //   if (response.ok) {
+    //     const data = await response.json();
+    //     setEntries(data.entries || []);
+    //   }
+    // } catch (error) {
+    //   console.error("Failed to fetch entries:", error);
+    // } finally {
+    //   setIsLoading(false);
+    // }
+
+    // Hardcoded entry from backend/outputs/gemini_response.json
+    setEntries([
+      {
+        _id: "hardcoded-1",
+        userId: "hardcoded",
+        transcription: "Okay, just record anything. Okay. I'm gonna start this.",
+        type: "voice",
+        createdAt: new Date().toISOString(),
+        logOutput: PLACEHOLDER_LOG_OUTPUT,
+      },
+    ]);
+    setIsLoading(false);
   };
 
   // Calendar helpers
@@ -176,24 +160,13 @@ export default function JournalView() {
     : entries;
 
   const currentEntry = displayEntries[pageIndex] ?? null;
-
-  const stressLabel = (score: number) =>
-    score >= 7 ? "High stress" : score >= 5 ? "Medium stress" : "Low stress";
+  const rawLog = currentEntry?.logOutput;
+  const logOutput = (rawLog?.affirmation && rawLog?.gratitude_points?.length && rawLog?.summary)
+    ? rawLog
+    : PLACEHOLDER_LOG_OUTPUT;
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">
-      {isTranscribing && (
-        <div className="flex items-center gap-3 mb-6 p-4 bg-card rounded-lg border border-border">
-          <Loader2 className="w-5 h-5 animate-spin text-primary" />
-          <span className="text-foreground/70">Transcribing your entry...</span>
-        </div>
-      )}
-      {transcriptionError && (
-        <div className="mb-6 p-4 bg-destructive/10 border border-destructive rounded-lg text-sm text-destructive">
-          {transcriptionError}
-        </div>
-      )}
-
       <div className="flex gap-6">
         {/* Left sidebar */}
         <div className="w-56 flex-shrink-0 space-y-4">
@@ -288,15 +261,15 @@ export default function JournalView() {
                   })}
                 </h2>
                 <div className="flex items-center gap-3">
-                  {currentEntry?.stressScore != null && (
+                  {logOutput.stress_score != null && (
                     <span className={`px-3 py-1 rounded-full text-sm font-medium border ${
-                      currentEntry.stressScore >= 7
+                      logOutput.stress_score >= 70
                         ? "bg-destructive/10 text-destructive border-destructive/20"
-                        : currentEntry.stressScore >= 5
+                        : logOutput.stress_score >= 40
                         ? "bg-yellow-100 text-yellow-800 border-yellow-200"
                         : "bg-green-100 text-green-800 border-green-200"
                     }`}>
-                      {stressLabel(currentEntry.stressScore)} • {currentEntry.stressScore}/10
+                      {logOutput.stress_score >= 70 ? "High stress" : logOutput.stress_score >= 40 ? "Medium stress" : "Low stress"} • {logOutput.stress_score}/100
                     </span>
                   )}
                   {/* Page arrows */}
@@ -326,69 +299,90 @@ export default function JournalView() {
                 <div className="px-8 py-6 space-y-6">
                   {/* Stress Score + Soundtrack side by side */}
                   <div className="grid grid-cols-2 gap-4">
-                    {currentEntry.stressScore != null && (
-                      <div className="bg-muted/50 rounded-xl p-5 border border-border">
-                        <div className="flex items-center gap-2 mb-3">
-                          <svg className="w-4 h-4 text-foreground/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                          </svg>
-                          <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide">Stress Score</p>
-                        </div>
-                        <p className="text-5xl font-light text-foreground">{currentEntry.stressScore}</p>
-                        <p className="text-sm text-foreground/40 mt-1">/ 10</p>
+                    <div className="bg-muted/50 rounded-xl p-5 border border-border">
+                      <div className="flex items-center gap-2 mb-3">
+                        <svg className="w-4 h-4 text-foreground/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide">Stress Score</p>
                       </div>
-                    )}
-                    {currentEntry.logOutput?.songRecommendation && (
-                      <div className="bg-muted/50 rounded-xl p-5 border border-border flex items-center gap-4">
-                        <div className="w-14 h-14 bg-gradient-to-br from-primary/30 to-chart-3/30 rounded-xl flex-shrink-0 flex items-center justify-center">
+                      <p className="text-5xl font-light text-foreground">{logOutput.stress_score}</p>
+                      <p className="text-sm text-foreground/40 mt-1">/ 100</p>
+                    </div>
+                    <div className="bg-muted/50 rounded-xl p-5 border border-border flex items-center gap-4">
+                      {logOutput.album_cover_url ? (
+                        <img
+                          src={logOutput.album_cover_url}
+                          alt="Album cover"
+                          className="w-14 h-14 rounded-xl object-cover shrink-0"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                        />
+                      ) : (
+                        <div className="w-14 h-14 bg-linear-to-br from-primary/30 to-chart-3/30 rounded-xl shrink-0 flex items-center justify-center">
                           <svg className="w-7 h-7 text-primary" fill="currentColor" viewBox="0 0 24 24">
                             <path d="M12 3v9.28c-.47-.46-1.12-.75-1.84-.75-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V7h4V3h-5z" />
                           </svg>
                         </div>
-                        <div>
-                          <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide mb-1">Soundtrack</p>
-                          <p className="font-semibold text-foreground text-sm">{currentEntry.logOutput.songRecommendation.title}</p>
-                          <p className="text-xs text-foreground/50">{currentEntry.logOutput.songRecommendation.artist}</p>
-                        </div>
+                      )}
+                      <div>
+                        <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide mb-1">Soundtrack</p>
+                        <p className="font-semibold text-foreground text-sm">{logOutput.song_name}</p>
+                        <p className="text-xs text-foreground/50">{logOutput.artist}</p>
                       </div>
-                    )}
+                    </div>
                   </div>
 
                   {/* Affirmation */}
-                  {currentEntry.logOutput?.affirmation && (
-                    <div className="bg-amber-50 rounded-xl p-5 border border-amber-100">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs font-semibold text-amber-600 uppercase tracking-wide">Daily Affirmation</p>
-                        <button
-                          onClick={() => handleSpeak(`${currentEntry.logOutput!.emotionalInference} ${currentEntry.logOutput!.affirmation}`)}
-                          disabled={isSpeaking}
-                          className="flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-800 disabled:opacity-50 transition"
-                        >
-                          {isSpeaking ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
-                            </svg>
-                          )}
-                          {isSpeaking ? "Playing..." : "Listen"}
-                        </button>
-                      </div>
-                      <p className="text-lg italic text-foreground">"{currentEntry.logOutput.affirmation}"</p>
+                  <div className="bg-amber-50 rounded-xl p-5 border border-amber-100">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-amber-600 uppercase tracking-wide">Daily Affirmation</p>
+                      <button
+                        onClick={() => {
+                          const gratitude = logOutput.gratitude_points?.length
+                            ? "Things to be grateful for: " + logOutput.gratitude_points.join(". ")
+                            : "";
+                          handleSpeak([logOutput.affirmation, logOutput.summary, gratitude].filter(Boolean).join(". "));
+                        }}
+                        disabled={isSpeaking}
+                        className="flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-800 disabled:opacity-50 transition"
+                      >
+                        {isSpeaking ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                          </svg>
+                        )}
+                        {isSpeaking ? "Playing..." : "Listen"}
+                      </button>
                     </div>
-                  )}
+                    <p className="text-lg italic text-foreground">"{logOutput.affirmation}"</p>
+                  </div>
 
                   {/* Summary */}
-                  {currentEntry.logOutput?.emotionalInference && (
-                    <div className="rounded-xl p-5 border border-border">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 text-foreground/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <circle cx="12" cy="12" r="10" strokeWidth={2} />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" />
-                        </svg>
-                        <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide">Summary</p>
-                      </div>
-                      <p className="text-foreground/80 leading-relaxed">{currentEntry.logOutput.emotionalInference}</p>
+                  <div className="rounded-xl p-5 border border-border">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 text-foreground/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="10" strokeWidth={2} />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01" />
+                      </svg>
+                      <p className="text-xs font-semibold text-foreground/40 uppercase tracking-wide">Summary</p>
+                    </div>
+                    <p className="text-foreground/80 leading-relaxed">{logOutput.summary}</p>
+                  </div>
+
+                  {/* Gratitude Points */}
+                  {logOutput.gratitude_points.length > 0 && (
+                    <div className="rounded-xl p-5 border border-border bg-green-50/50">
+                      <p className="text-xs font-semibold text-green-700 uppercase tracking-wide mb-3">Gratitude</p>
+                      <ul className="space-y-2">
+                        {logOutput.gratitude_points.map((point, i) => (
+                          <li key={i} className="flex items-start gap-2 text-sm text-foreground/80">
+                            <span className="text-green-500 mt-0.5">✦</span>
+                            {point}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   )}
 
