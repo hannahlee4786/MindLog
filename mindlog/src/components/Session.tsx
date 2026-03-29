@@ -25,6 +25,7 @@ export function Session() {
   const [inputValue, setInputValue] = useState("");
   const [inputMode, setInputMode] = useState<"text" | "voice">("text");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const stressLevel = 7.3;
   const weeklyAverage = 5.8;
@@ -57,6 +58,53 @@ export function Session() {
       setMessages((prev) => [...prev, aiResponse]);
       setIsProcessing(false);
     }, 1000);
+  };
+
+  const handleAudioReady = async (blob: Blob) => {
+    setIsProcessing(true);
+    setSaveError(null);
+    try {
+      const formData = new FormData();
+      formData.append("audio", blob, "recording.webm");
+      const transcribeRes = await fetch("/api/transcribe", { method: "POST", body: formData });
+      if (!transcribeRes.ok) {
+        const err = await transcribeRes.json();
+        throw new Error(`Transcription failed: ${err.error || transcribeRes.status}`);
+      }
+      const data = await transcribeRes.json();
+      const text = data.text || "";
+
+      if (!text) {
+        throw new Error("No transcription text returned — audio may be too short");
+      }
+
+      handleTranscriptionComplete(text);
+
+      const userId = localStorage.getItem("mindlog_user_id");
+      if (!userId) {
+        throw new Error("Not logged in — no userId in localStorage");
+      }
+
+      const entryRes = await fetch("/api/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, transcription: text, type: "voice", stressScore: null }),
+      });
+      if (!entryRes.ok) {
+        const err = await entryRes.json();
+        throw new Error(`Failed to save entry: ${err.error || entryRes.status}`);
+      }
+      const { entryId } = await entryRes.json();
+      await fetch("/api/entries/logoutput", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entryId }),
+      });
+    } catch (err: any) {
+      setSaveError(err.message || "Something went wrong");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const handleTranscriptionComplete = (transcription: string) => {
@@ -99,6 +147,12 @@ export function Session() {
           <span className="text-sm text-secondary-foreground">Medium stress</span>
         </div>
       </div>
+
+      {saveError && (
+        <div className="mb-4 p-3 bg-destructive/10 border border-destructive rounded-lg text-sm text-destructive">
+          {saveError}
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Left panel - Conversation */}
@@ -176,9 +230,7 @@ export function Session() {
             ) : (
               <>
                 <VoiceRecorder
-                  onRecordingEnd={() => {
-                    // Additional handling if needed
-                  }}
+                  onAudioReady={handleAudioReady}
                 />
                 <button
                   onClick={() => setInputMode("text")}
